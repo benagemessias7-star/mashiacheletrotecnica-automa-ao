@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plataforma Comercial - Monitoramento de Aviários</title>
+    <!-- Bibliotecas gratuitas de Gráficos e Estilo -->
+    <script src="https://jsdelivr.net"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f9; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .btn { background: #3498db; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; }
+        .btn:hover { background: #2980b9; }
+        .btn-danger { background: #e74c3c; }
+        input { width: 100%; padding: 10px; margin: 10px 0 20px 0; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; background: white; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: center; }
+        th { background: #34495e; color: white; }
+        tr:nth-child(even) { background: #f9f9f9; }
+        .hidden { display: none; }
+        .header-painel { display: flex; justify-content: space-between; align-items: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- TELA DE LOGIN -->
+    <div id="tela-login" class="card">
+        <h2>Acesso ao Painel do Aviário</h2>
+        <label>Usuário comercial:</label>
+        <input type="text" id="user" placeholder="Digite seu usuário">
+        <label>ID do Controlador (LilyGo):</label>
+        <input type="text" id="controlador-id" placeholder="Ex: e057f4abc31c">
+        <button class="btn" onclick="fazerLogin()">ENTRAR NO PAINEL</button>
+    </div>
+
+    <!-- PAINEL DO CLIENTE (SÓ APARECE APÓS LOGAR) -->
+    <div id="tela-painel" class="card hidden">
+        <div class="header-painel">
+            <h2>Monitoramento em Tempo Real</h2>
+            <button class="btn btn-danger" style="width: auto;" onclick="fazerLogout()">SAIR / LOGOUT</button>
+        </div>
+        <p>Controlador Ativo: <b id="txt-id-logado">---</b></p>
+        
+        <button class="btn" onclick="buscarDadosServidor()">🔄 ATUALIZAR DADOS DO AVIÁRIO</button>
+
+        <!-- GRÁFICO MODERNO -->
+        <div style="margin-top: 30px; height: 40px; height: 350px;">
+            <canvas id="graficoCliente"></canvas>
+        </div>
+
+        <!-- TABELA DE GRANDEZAS -->
+        <h3>Histórico Recente (Últimos Registros)</h3>
+        <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Data/Hora</th>
+                        <th>CLP Hora</th>
+                        <th>Ciclo Dia</th>
+                        <th>Temp ºC</th>
+                        <th>Umidade %</th>
+                        <th>Vol Total L</th>
+                    </tr>
+                </thead>
+                <tbody id="corpo-tabela">
+                    <tr><td colspan="6">Clique em atualizar para carregar os dados.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    var meuGrafico = null;
+    var IP_SUA_VM = "34.24.211.232"; // Seu IP fixo do Google Cloud
+
+    // Verifica se o cliente já estava logado antes
+    window.onload = function() {
+        var idSalvo = localStorage.getItem("id_controlador_cliente");
+        if (idSalvo) {
+            mostrarPainel(idSalvo);
+        }
+    };
+
+    function fazerLogin() {
+        var idInput = document.getElementById("controlador-id").value.trim();
+        if (idInput === "") { alert("Por favor, informe o ID do seu controlador."); return; }
+        
+        localStorage.setItem("id_controlador_cliente", idInput);
+        mostrarPainel(idInput);
+    }
+
+    function mostrarPainel(id) {
+        document.getElementById("tela-login").classList.add("hidden");
+        document.getElementById("tela-painel").classList.remove("hidden");
+        document.getElementById("txt-id-logado").innerText = id;
+        buscarDadosServidor();
+    }
+
+    function fazerLogout() {
+        localStorage.clear();
+        window.location.reload();
+    }
+
+    function buscarDadosServidor() {
+        var idCliente = localStorage.getItem("id_controlador_cliente");
+        var urlAPI = "http://" + IP_SUA_VM + ":1880/historico-cliente?id=" + idCliente;
+
+        fetch(urlAPI)
+        .then(response => response.text())
+        .then(textoCsv => {
+            processarDadosEPlotar(textoCsv);
+        })
+        .catch(err => {
+            alert("Erro ao conectar na maquina virtual. Verifique se a API do Node-RED esta online.");
+            console.error(err);
+        });
+    }
+
+    function processarDadosEPlotar(textoCsv) {
+        var linhas = textoCsv.split("\n");
+        var tabelaHtml = "";
+        
+        var labelsData = [];
+        var dadosTemp = [];
+        var dadosUmi = [];
+
+        // Lê as linhas (mostra as últimas 15 na tabela para não travar a tela)
+        var limiteRegistros = Math.max(0, linhas.length - 15);
+        
+        for (var i = linhas.length - 1; i >= 0; i--) {
+            var linha = linhas[i].trim();
+            if (linha === "") continue;
+
+            var colunas = linha.split(";");
+            if (colunas.length < 11) continue;
+
+            // Extrai as informações básicas para a tabela na tela do cliente
+            if (i >= limiteRegistros) {
+                tabelaHtml += "<tr>" +
+                    "<td>" + colunas[0] + "</td>" +
+                    "<td>" + colunas[2] + "</td>" +
+                    "<td>" + colunas[3] + "</td>" +
+                    "<td>" + colunas[5] + " ºC</td>" +
+                    "<td>" + colunas[6] + " %</td>" +
+                    "<td>" + colunas[10] + " L</td>" +
+                "</tr>";
+            }
+
+            // Guarda os pontos para o gráfico do cliente
+            labelsData.unshift(colunas[0].split(",")[1] || colunas[0]); // Pega apenas o horário
+            dadosTemp.unshift(parseFloat(colunas[5]) || 0);
+            dadosUmi.unshift(parseFloat(colunas[6]) || 0);
+        }
+
+        document.getElementById("corpo-tabela").innerHTML = tabelaHtml || "<tr><td colspan='6'>Nenhum dado encontrado para este ID.</td></tr>";
+
+        // DESENHA OU ATUALIZA O GRÁFICO DO CLIENTE COM DUAS LINHAS
+        var ctx = document.getElementById('graficoCliente').getContext('2d');
+        if (meuGrafico) meuGrafico.destroy(); // Limpa gráfico antigo
+
+        meuGrafico = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labelsData,
+                datasets: [
+                    { label: 'Temperatura ºC', data: dadosTemp, borderColor: '#e74c3c', backgroundColor: 'transparent', borderWidth: 2 },
+                    { label: 'Umidade %', data: dadosUmi, borderColor: '#3498db', backgroundColor: 'transparent', borderWidth: 2 }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+    }
+</script>
+</body>
+</html>
+
+
